@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stick VERSUS — Fan Homage</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <meta http-equiv="Cache-Control" content="no-cache" />
+  <link rel="stylesheet" href="css/style.css?v=71" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game" width="1280" height="720"></canvas>
+    <div id="hud" class="hidden">
+      <div id="boss-hud" class="boss-hud hidden">
+        <div class="boss-name" id="boss-name">黑暗领主</div>
+        <div class="boss-hp-wrap">
+          <div class="boss-hp-mark" id="boss-hp-mark" title="狂暴线"></div>
+          <div class="boss-hp" id="boss-hp"></div>
+        </div>
+        <div class="boss-sub" id="boss-sub">弱点 · 半血狂暴</div>
+      </div>
+      <div class="p-bar p1">
+        <div class="name" id="p1-name">ORANGE</div>
+        <div class="hp-wrap"><div class="hp" id="p1-hp"></div><div class="hp-danger" id="p1-danger"></div></div>
+        <div class="stam-wrap"><div class="stam" id="p1-stam"></div></div>
+        <div class="skill-wrap"><div class="skill" id="p1-skill"></div></div>
+        <div class="nodes" id="p1-nodes"></div>
+      </div>
+      <div class="center-hud">
+        <div class="files" id="files-display">0 — 0</div>
+        <div class="timer" id="timer">99</div>
+        <div class="area" id="area-name">DESKTOP</div>
+      </div>
+      <div class="p-bar p2">
+        <div class="name" id="p2-name">RED</div>
+        <div class="hp-wrap"><div class="hp" id="p2-hp"></div><div class="hp-danger" id="p2-danger"></div></div>
+        <div class="stam-wrap"><div class="stam" id="p2-stam"></div></div>
+        <div class="skill-wrap"><div class="skill" id="p2-skill"></div></div>
+        <div class="nodes" id="p2-nodes"></div>
+      </div>
+    </div>
+    <div id="overlay"></div>
+
+    <div id="auth-login" class="auth-panel hidden" aria-hidden="true">
+      <div class="auth-card">
+        <h2>登录</h2>
+        <p class="auth-sub">邀请码或注册帐号 · 仅本机保存</p>
+        <label class="auth-label" for="auth-invite">帐号 / 邀请码</label>
+        <input id="auth-invite" class="auth-input" type="text" autocomplete="username" spellcheck="false" />
+        <label class="auth-label" for="auth-pass">密码</label>
+        <input id="auth-pass" class="auth-input" type="password" autocomplete="current-password" />
+        <p id="auth-login-msg" class="auth-msg"></p>
+        <button id="auth-login-btn" class="auth-btn" type="button">进入</button>
+        <button id="auth-goto-register" class="auth-btn auth-btn-ghost" type="button">注册帐号</button>
+      </div>
+    </div>
+
+    <div id="auth-register" class="auth-panel hidden" aria-hidden="true">
+      <div class="auth-card">
+        <h2>注册帐号</h2>
+        <p class="auth-sub">自建玩家帐号 · 密码至少 8 位 · 仅本机保存</p>
+        <label class="auth-label" for="auth-reg-user">用户名</label>
+        <input id="auth-reg-user" class="auth-input" type="text" autocomplete="username" spellcheck="false" maxlength="20" />
+        <label class="auth-label" for="auth-reg-pass">密码（至少 8 位）</label>
+        <input id="auth-reg-pass" class="auth-input" type="password" autocomplete="new-password" minlength="8" />
+        <label class="auth-label" for="auth-reg-pass2">确认密码</label>
+        <input id="auth-reg-pass2" class="auth-input" type="password" autocomplete="new-password" minlength="8" />
+        <p id="auth-register-msg" class="auth-msg"></p>
+        <button id="auth-register-btn" class="auth-btn" type="button">注册并进入</button>
+        <button id="auth-goto-login" class="auth-btn auth-btn-ghost" type="button">返回登录</button>
+      </div>
+    </div>
+
+    <div id="auth-change" class="auth-panel hidden" aria-hidden="true">
+      <div class="auth-card">
+        <h2>修改密码</h2>
+        <p class="auth-sub">玩家首次登录须改密（至少 8 位）。管理员 / 测试帐号不强制，可在设置中修改。</p>
+        <p id="auth-change-user" class="auth-user"></p>
+        <label class="auth-label" for="auth-old">当前密码</label>
+        <input id="auth-old" class="auth-input" type="password" autocomplete="current-password" />
+        <label class="auth-label" for="auth-new">新密码（至少 8 位）</label>
+        <input id="auth-new" class="auth-input" type="password" autocomplete="new-password" minlength="8" />
+        <label class="auth-label" for="auth-new2">确认新密码</label>
+        <input id="auth-new2" class="auth-input" type="password" autocomplete="new-password" minlength="8" />
+        <p id="auth-change-msg" class="auth-msg"></p>
+        <button id="auth-change-btn" class="auth-btn" type="button">确认修改</button>
+        <button id="auth-logout-btn" class="auth-btn auth-btn-ghost" type="button">退出登录</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="js/main.js?v=71"></script>
+</body>
+</html>
