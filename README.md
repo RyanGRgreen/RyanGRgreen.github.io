@@ -2,6 +2,15 @@
 
 Browser fan homage to the *Animation VERSUS* combat systems (Alan Becker / Animators VS Games). Not affiliated with the official game.
 
+## Online VS
+
+模式菜单选 **ONLINE VS**：
+1. 一方 **创建房间** → 得到 6 位房间号  
+2. 另一方 **加入房间** → 输入号码  
+3. 各自选角并准备 → 房主选场地开战  
+
+基于 PeerJS P2P（GitHub Pages 可用），主机演算、客机收状态，降低不同步。双方需能访问公网 STUN。
+
 ## Play
 
 **一键启动（推荐）：**

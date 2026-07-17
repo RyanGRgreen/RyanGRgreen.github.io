@@ -1,4 +1,4 @@
-import { ARENA } from "./stages.js?v=71";
+import { ARENA } from "./stages.js?v=72";
 
 const GRAVITY = 0.55;
 const FRICTION = 0.82;

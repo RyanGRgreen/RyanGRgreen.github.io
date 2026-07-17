@@ -1,7 +1,7 @@
 /** Campaign character upgrades (per invite / registered account). */
 
-import { getSessionInvite, isTesterAccount, getCurrentAccount } from "./accounts.js?v=71";
-import { queueAccountChange } from "./cloudSync.js?v=71";
+import { getSessionInvite, isTesterAccount, getCurrentAccount } from "./accounts.js?v=72";
+import { queueAccountChange } from "./cloudSync.js?v=72";
 
 /** @typedef {{ id: string, name: string, desc: string, cost: number, max: number, per: number }} UpgradeDef */
 
