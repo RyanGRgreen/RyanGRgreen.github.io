@@ -1,13 +1,14 @@
 /** Keyboard bindings — defaults + localStorage remaps. */
 
-import { queueAccountChange } from "./cloudSync.js?v=72";
-import { getSessionInvite } from "./accounts.js?v=72";
+import { queueAccountChange } from "./cloudSync.js?v=79";
+import { getSessionInvite } from "./accounts.js?v=79";
 
 export class Input {
   constructor() {
     this.keys = Object.create(null);
     this.just = Object.create(null);
     this.prev = Object.create(null);
+    this._latch = Object.create(null); // one-frame presses from touch taps
     this._listenFor = null; // { side, action, resolve } while rebinding
     window.addEventListener("keydown", (e) => {
       if (this._listenFor) {
@@ -24,10 +25,27 @@ export class Input {
         setBind(side, action, code);
         return;
       }
+      // Don't steal keys while typing in HTML fields (room code / auth)
+      const ae = document.activeElement;
+      if (
+        ae &&
+        (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)
+      ) {
+        if (e.code === "Escape") this.keys[e.code] = true;
+        return;
+      }
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) e.preventDefault();
       this.keys[e.code] = true;
     });
     window.addEventListener("keyup", (e) => {
+      const ae = document.activeElement;
+      if (
+        ae &&
+        (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable) &&
+        e.code !== "Escape"
+      ) {
+        return;
+      }
       this.keys[e.code] = false;
     });
     window.addEventListener("blur", () => {
@@ -48,11 +66,22 @@ export class Input {
     return !!this._listenFor;
   }
 
+  /** Queue a one-shot press (touch virtual buttons survive quick taps). */
+  latchJust(code) {
+    if (!code) return;
+    this.keys[code] = true;
+    this._latch[code] = true;
+  }
+
   midFrame() {
     this.just = Object.create(null);
     for (const k of Object.keys(this.keys)) {
       if (this.keys[k] && !this.prev[k]) this.just[k] = true;
     }
+    for (const k of Object.keys(this._latch)) {
+      if (this._latch[k]) this.just[k] = true;
+    }
+    this._latch = Object.create(null);
   }
 
   endFrame() {

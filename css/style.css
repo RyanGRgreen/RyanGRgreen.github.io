@@ -387,3 +387,172 @@ html, body {
   color: #e8eef6;
   border-color: #6b7c90;
 }
+
+/* —— Touch controls —— */
+.touch-pad {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  touch-action: none;
+}
+.touch-pad.hidden { display: none !important; }
+.touch-btn {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid rgba(232, 238, 246, 0.45);
+  background: rgba(18, 24, 31, 0.55);
+  color: #e8eef6;
+  font-family: "Press Start 2P", monospace;
+  font-size: 11px;
+  text-shadow: 0 1px 0 #000;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.35);
+}
+.touch-btn.active {
+  background: rgba(255, 107, 44, 0.55);
+  border-color: #ffd166;
+}
+.touch-stick {
+  border-radius: 50%;
+  background: rgba(18, 24, 31, 0.4);
+}
+.touch-stick span {
+  position: absolute;
+  bottom: 6%;
+  font-size: 9px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.touch-stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 38%;
+  height: 38%;
+  border-radius: 50%;
+  background: rgba(255, 107, 44, 0.75);
+  border: 2px solid rgba(255, 209, 102, 0.8);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.touch-pad.edit-mode .touch-btn {
+  outline: 2px dashed #ffd166;
+  background: rgba(255, 107, 44, 0.35);
+}
+
+html.touch-controls,
+html.touch-controls body {
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+.control-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.65);
+  padding: 20px;
+}
+.control-prompt.hidden { display: none !important; }
+.control-prompt-card {
+  width: min(420px, 92vw);
+  background: #12181f;
+  border: 2px solid #ff6b2c;
+  padding: 22px 20px 18px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.control-prompt-card h2 {
+  font-family: "Press Start 2P", monospace;
+  font-size: 14px;
+  color: #ffd166;
+  margin-bottom: 12px;
+  text-align: center;
+}
+.control-prompt-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #cfd8e6;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.control-prompt-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* —— Online join (PC / phone) —— */
+.online-join-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: transparent;
+}
+.online-join-panel.hidden {
+  display: none !important;
+}
+.online-join-card {
+  pointer-events: auto;
+  width: min(360px, 90vw);
+  margin-top: min(28vh, 220px);
+  padding: 18px 16px 14px;
+  background: rgba(12, 16, 22, 0.94);
+  border: 2px solid #2a3544;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.15s ease;
+}
+.online-join-panel.editing .online-join-card {
+  border-color: #ff6b2c;
+}
+.online-join-label {
+  display: block;
+  font-family: "Press Start 2P", monospace;
+  font-size: 10px;
+  color: #ffd166;
+  margin-bottom: 10px;
+  text-align: center;
+}
+.online-join-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: "Press Start 2P", monospace;
+  font-size: 22px;
+  letter-spacing: 0.35em;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 14px 8px;
+  border: 2px solid #2a3544;
+  background: #0a0e14;
+  color: #6b7c90;
+  outline: none;
+  cursor: pointer;
+}
+.online-join-panel.editing .online-join-input {
+  color: #e8eef6;
+  border-color: #ff6b2c;
+  cursor: text;
+}
+.online-join-input:focus {
+  border-color: #ff6b2c;
+}
+.online-join-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #6b7c90;
+  text-align: center;
+}
+.online-join-actions {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+}

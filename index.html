@@ -2,13 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Stick VERSUS — Fan Homage</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
   <meta http-equiv="Cache-Control" content="no-cache" />
-  <link rel="stylesheet" href="css/style.css?v=72" />
+  <link rel="stylesheet" href="css/style.css?v=79" />
 </head>
 <body>
   <div id="app">
@@ -91,7 +91,31 @@
       </div>
     </div>
   </div>
+
+  <div id="online-join-panel" class="online-join-panel hidden" aria-hidden="true">
+    <div class="online-join-card">
+      <label class="online-join-label" for="online-join-input">房间号</label>
+      <input
+        id="online-join-input"
+        class="online-join-input"
+        type="text"
+        maxlength="6"
+        inputmode="text"
+        autocomplete="off"
+        autocapitalize="characters"
+        spellcheck="false"
+        readonly
+        placeholder="点此输入"
+      />
+      <p class="online-join-hint">点输入框后输入 · Esc 退出输入</p>
+      <div class="online-join-actions">
+        <button id="online-join-go" class="auth-btn" type="button">加入房间</button>
+        <button id="online-join-back" class="auth-btn auth-btn-ghost" type="button">返回</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script type="module" src="js/main.js?v=72"></script>
+  <script type="module" src="js/main.js?v=79"></script>
 </body>
 </html>

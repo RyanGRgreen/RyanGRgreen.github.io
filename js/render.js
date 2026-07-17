@@ -1,6 +1,6 @@
-import { ARENA } from "./stages.js?v=72";
-import { attackBox } from "./fighter.js?v=72";
-import { drawImpact, drawWeaponIcon } from "./assets.js?v=72";
+import { ARENA } from "./stages.js?v=78";
+import { attackBox } from "./fighter.js?v=78";
+import { drawImpact, drawWeaponIcon } from "./assets.js?v=78";
 
 export function drawMatch(ctx, match, W, H, overlayText) {
   ctx.save();

@@ -2,14 +2,26 @@
 
 Browser fan homage to the *Animation VERSUS* combat systems (Alan Becker / Animators VS Games). Not affiliated with the official game.
 
-## Online VS
+## Touch / 触屏
 
-模式菜单选 **ONLINE VS**：
-1. 一方 **创建房间** → 得到 6 位房间号  
-2. 另一方 **加入房间** → 输入号码  
-3. 各自选角并准备 → 房主选场地开战  
+- 平板 / 手机等触屏设备会询问是否使用虚拟按键  
+- 接上键盘时，若正在用触屏，会再询问是否改回键盘  
+- **设置 → 触屏**：可拖动调整按键位置，或重置布局 / 手动切换触屏·键盘  
 
-基于 PeerJS P2P（GitHub Pages 可用），主机演算、客机收状态，降低不同步。双方需能访问公网 STUN。
+## Accounts / 帐号云同步
+
+- 注册、改密会把 **用户名 + 密码哈希** 同步到云端（**不存明文密码**）
+- 本地 `serve.py`：写入 `data/accounts-cloud.json`（`GET/PUT /api/accounts`）
+- GitHub Pages / 公网：默认走 JSONBlob 公共库，电脑和手机可共用同一帐号
+- 设置 → 账号：显示同步状态，按 **J** 立即同步
+
+可在 `js/cloudConfig.js` 改 `CLOUD_OVERRIDE` 指向自建 Firebase / JSONBin。
+1. 一方 **创建房间** → 得到 6 位房间号（可点号码复制）
+2. 另一方 **加入房间** → 输入号码（手机有输入框）
+3. 各自选角并准备 → 房主选场地开战
+
+基于 PeerJS P2P（GitHub Pages 可用）+ STUN/TURN，主机演算、客机收状态。  
+**双方需打开同一游戏网址**（例如 GitHub Pages；不要一边用 `127.0.0.1`、一边用公网除非你只在本机测）。手机流量与电脑 Wi‑Fi 一般也能连。
 
 ## Play
 

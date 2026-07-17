@@ -1,12 +1,12 @@
-import { Input, BIND_P1, BIND_P2, BIND_ACTIONS_P1, BIND_ACTIONS_P2, formatBindCode, loadBinds, resetBinds } from "./input.js?v=72";
-import { CHARACTERS, CHARACTER_ORDER } from "./characters.js?v=72";
-import { STAGES, STAGE_ORDER } from "./stages.js?v=72";
-import { Match } from "./match.js?v=72";
-import { drawMatch, syncHud, hideHud, drawStickFigure } from "./render.js?v=72";
-import { Tutorial } from "./tutorial.js?v=72";
-import { StoryMode, STORY_DISCLAIMER, STORY_SPEAKER_COLOR } from "./story.js?v=72";
-import { CampaignMode } from "./campaign.js?v=72";
-import { loadAssets } from "./assets.js?v=72";
+import { Input, BIND_P1, BIND_P2, BIND_ACTIONS_P1, BIND_ACTIONS_P2, formatBindCode, loadBinds, resetBinds } from "./input.js?v=79";
+import { CHARACTERS, CHARACTER_ORDER } from "./characters.js?v=79";
+import { STAGES, STAGE_ORDER } from "./stages.js?v=79";
+import { Match } from "./match.js?v=79";
+import { drawMatch, syncHud, hideHud, drawStickFigure } from "./render.js?v=79";
+import { Tutorial } from "./tutorial.js?v=79";
+import { StoryMode, STORY_DISCLAIMER, STORY_SPEAKER_COLOR } from "./story.js?v=79";
+import { CampaignMode } from "./campaign.js?v=79";
+import { loadAssets } from "./assets.js?v=79";
 import {
   STORY_UPGRADE_DEFS,
   loadCampaignUpgrades,
@@ -16,7 +16,7 @@ import {
   awardCampaignLevelClear,
   canUseCampaignUpgrades,
   previewCampaignStats,
-} from "./storyUpgrades.js?v=72";
+} from "./storyUpgrades.js?v=79";
 import {
   ensureSeedAccounts,
   loginWithInvite,
@@ -28,8 +28,16 @@ import {
   accountDisplayName,
   getCurrentAccount,
   isTesterAccount,
-} from "./accounts.js?v=72";
-import { cloudQueueLength } from "./cloudSync.js?v=72";
+  syncAccountsWithCloud,
+  accountCloudIo,
+} from "./accounts.js?v=79";
+import {
+  cloudQueueLength,
+  getCloudStatus,
+  resolveCloudTarget,
+  pushAccountsToCloud,
+  syncAccountsFromCloud,
+} from "./cloudSync.js?v=79";
 import {
   loadAudio,
   unlockAudio,
@@ -38,7 +46,7 @@ import {
   toggleMute,
   isMuted,
   setMuteListener,
-} from "./audio.js?v=72";
+} from "./audio.js?v=79";
 import {
   probeLobbyMusic,
   getLobbyTracks,
@@ -54,8 +62,21 @@ import {
   isLobbyMusicPlaying,
   lobbyMusicStatusLine,
   openTrackOnBilibili,
-} from "./music.js?v=72";
-import { OnlineSession, applyMatchState, emptyInput } from "./online.js?v=72";
+} from "./music.js?v=79";
+import { OnlineSession, applyMatchState, emptyInput } from "./online.js?v=79";
+import {
+  initTouch,
+  maybeAskTouchOnBoot,
+  isTouchCapable,
+  getControlMode,
+  setControlMode,
+  updateTouchForScreen,
+  setTouchEditMode,
+  isTouchEditMode,
+  resetTouchLayout,
+  showControlPrompt,
+  isControlPromptVisible,
+} from "./touch.js?v=79";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -63,10 +84,31 @@ const W = canvas.width;
 const H = canvas.height;
 const input = new Input();
 
+/** Touch title: one-shot tap → enter (consumed by handleMenus). */
+let pendingTitleTap = false;
+
+function consumeTitleTap() {
+  if (!pendingTitleTap) return false;
+  pendingTitleTap = false;
+  return true;
+}
+
+function touchTitleEnter() {
+  if (getControlMode() !== "touch") {
+    pendingTitleTap = false;
+    return false;
+  }
+  if (state.confirmLock > 0) {
+    pendingTitleTap = false;
+    return false;
+  }
+  return consumeTitleTap();
+}
+
 const MODES = ["tutorial", "story", "campaign", "cpu", "versus", "online"];
 
 const state = {
-  screen: "title", // + onlineLobby, onlineChars, onlineStage
+  screen: "title", // + onlineLobby, onlineHost, onlineJoin, onlineChars, onlineStage
   mode: "tutorial",
   modeIndex: 0,
   p1: 0,
@@ -80,6 +122,7 @@ const state = {
   onlineRole: null,
   onlineLobbySel: 0,
   onlineJoinCode: "",
+  onlineJoinEditing: false,
   onlineStatusLine: "",
   onlineHostReady: false,
   onlineGuestReady: false,
@@ -88,9 +131,10 @@ const state = {
   storyUpgradeSel: 0,
   storyUpgradeFlash: "",
   upgradeReturnTo: null, // null | "campaign"
-  settingsTab: 0, // 0 P1 binds · 1 P2 binds · 2 account
+  settingsTab: 0, // 0 P1 · 1 P2 · 2 touch · 3 account
   settingsSel: 0,
   settingsFlash: "",
+  touchEditHint: false,
   passwordReturnTo: "title",
   authBusy: false,
   logoutConfirm: false,
@@ -115,6 +159,8 @@ const LOBBY_SCREENS = new Set([
   "storyUpgrades",
   "settings",
   "onlineLobby",
+  "onlineHost",
+  "onlineJoin",
   "onlineChars",
   "onlineStage",
 ]);
@@ -203,6 +249,7 @@ function loop() {
   }
 
   draw();
+  updateTouchForScreen(state.screen);
   input.endFrame();
   requestAnimationFrame(loop);
 }
@@ -412,7 +459,7 @@ function handleMenus() {
 
   if (state.screen === "title") {
     if (state.logoutConfirm) {
-      if (state.confirmLock <= 0 && confirmPressed(i)) {
+      if (state.confirmLock <= 0 && (confirmPressed(i) || touchTitleEnter())) {
         playSfx("ui_back");
         state.logoutConfirm = false;
         doLogout();
@@ -447,10 +494,11 @@ function handleMenus() {
       openSettings();
       return;
     }
-    if (confirmPressed(i)) {
+    if (confirmPressed(i) || touchTitleEnter()) {
       unlockAudio();
       playSfx("ui_ok");
       state.screen = "mode";
+      state.confirmLock = 18;
       syncLobbyMusic();
     }
   } else if (state.screen === "music") {
@@ -554,6 +602,10 @@ function handleMenus() {
     }
   } else if (state.screen === "onlineLobby") {
     handleOnlineLobby(i);
+  } else if (state.screen === "onlineHost") {
+    handleOnlineHost(i);
+  } else if (state.screen === "onlineJoin") {
+    handleOnlineJoin(i);
   } else if (state.screen === "onlineChars") {
     handleOnlineChars(i);
   } else if (state.screen === "onlineStage") {
@@ -683,10 +735,123 @@ function openOnlineLobby() {
   closeOnlineSession();
   state.onlineLobbySel = 0;
   state.onlineJoinCode = "";
-  state.onlineStatusLine = "创建房间或输入 6 位房间号加入";
+  state.onlineStatusLine = "先选择：创建房间 或 加入房间";
   state.screen = "onlineLobby";
   state.confirmLock = 18;
   syncLobbyMusic();
+  syncOnlineJoinPanel();
+}
+
+function openOnlineHostScreen() {
+  state.onlineJoinCode = "";
+  state.onlineStatusLine = "正在创建房间…";
+  state.screen = "onlineHost";
+  state.confirmLock = 18;
+  syncOnlineJoinPanel();
+  onlineCreateRoom();
+}
+
+function openOnlineJoinScreen() {
+  closeOnlineSession();
+  state.onlineJoinCode = "";
+  state.onlineJoinEditing = false;
+  state.onlineStatusLine = "点输入框后再输入房间号";
+  state.screen = "onlineJoin";
+  state.confirmLock = 18;
+  syncOnlineJoinPanel();
+}
+
+function isOnlineJoinEditing() {
+  if (state.screen !== "onlineJoin") return false;
+  if (state.onlineJoinEditing) return true;
+  const ae = document.activeElement;
+  return !!(ae && ae.id === "online-join-input");
+}
+
+function startOnlineJoinEditing() {
+  state.onlineJoinEditing = true;
+  state.onlineStatusLine = "输入中 · Esc 退出输入";
+  const inputEl = document.getElementById("online-join-input");
+  const panel = document.getElementById("online-join-panel");
+  panel?.classList.add("editing");
+  if (inputEl) {
+    inputEl.readOnly = false;
+    setTimeout(() => {
+      inputEl.focus();
+      inputEl.select?.();
+    }, 20);
+  }
+  playSfx("ui_ok");
+}
+
+function stopOnlineJoinEditing({ clearCode = false } = {}) {
+  state.onlineJoinEditing = false;
+  const inputEl = document.getElementById("online-join-input");
+  const panel = document.getElementById("online-join-panel");
+  panel?.classList.remove("editing");
+  if (inputEl) {
+    inputEl.readOnly = true;
+    inputEl.blur();
+    if (clearCode) {
+      inputEl.value = "";
+      state.onlineJoinCode = "";
+    }
+  }
+  // Prevent Esc from also exiting to lobby on the same press
+  try {
+    input.keys.Escape = false;
+    if (input.just) delete input.just.Escape;
+  } catch {
+    /* ignore */
+  }
+  state.confirmLock = 18;
+  state.onlineStatusLine = clearCode ? "点输入框后再输入房间号" : "已退出输入 · 再点输入框继续";
+}
+
+function syncOnlineJoinPanel() {
+  const panel = document.getElementById("online-join-panel");
+  const inputEl = document.getElementById("online-join-input");
+  if (!panel) return;
+  const show = state.screen === "onlineJoin";
+  panel.classList.toggle("hidden", !show);
+  panel.setAttribute("aria-hidden", show ? "false" : "true");
+  panel.classList.toggle("editing", show && state.onlineJoinEditing);
+  if (!show) {
+    state.onlineJoinEditing = false;
+    inputEl?.blur();
+    return;
+  }
+  if (inputEl) {
+    if (inputEl.value.toUpperCase().replace(/[^A-Z0-9]/g, "") !== state.onlineJoinCode) {
+      inputEl.value = state.onlineJoinCode;
+    }
+    // Never auto-focus — must click in to type
+    if (!state.onlineJoinEditing && document.activeElement === inputEl) {
+      inputEl.blur();
+    }
+  }
+}
+
+function clientToGame(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: ((clientX - r.left) / r.width) * W,
+    y: ((clientY - r.top) / r.height) * H,
+  };
+}
+
+async function copyRoomCode() {
+  const code = state.online?.roomCode;
+  if (!code) return false;
+  try {
+    await navigator.clipboard.writeText(code);
+    state.onlineStatusLine = `已复制 ${code} · 发给电脑/手机上的对手`;
+    playSfx("ui_ok");
+    return true;
+  } catch {
+    state.onlineStatusLine = `房间号 ${code} · 请手动发给对手`;
+    return false;
+  }
 }
 
 function bindOnlineSession(session) {
@@ -696,20 +861,24 @@ function bindOnlineSession(session) {
     else if (s === "joining") state.onlineStatusLine = "正在加入…";
     else if (s === "ready") {
       state.onlineStatusLine = "已连接";
-      if (state.screen === "onlineLobby") {
+      if (state.screen === "onlineHost" || state.screen === "onlineJoin") {
         state.onlineHostReady = false;
         state.onlineGuestReady = false;
         state.screen = "onlineChars";
         state.confirmLock = 20;
         playSfx("ui_ok");
+        syncOnlineJoinPanel();
         syncOnlineChars();
       }
     } else if (s === "error" || s === "closed") {
       state.onlineStatusLine = err || "连接断开";
       if (state.screen === "fight") {
         /* stay until user exits */
+      } else if (state.screen === "onlineHost" || state.screen === "onlineJoin") {
+        /* keep sub-screen so they can retry / see error */
       } else if (state.screen !== "onlineLobby") {
         state.screen = "onlineLobby";
+        syncOnlineJoinPanel();
       }
     }
   };
@@ -763,10 +932,10 @@ async function onlineCreateRoom() {
     bindOnlineSession(session);
     state.onlineRole = "host";
     const code = await session.hostRoom();
-    state.onlineStatusLine = `房间 ${code} · 把号码发给对手`;
+    state.onlineStatusLine = "把房间号发给对手，等待加入";
     playSfx("ui_ok");
   } catch (e) {
-    state.onlineStatusLine = e?.message || "创建失败";
+    state.onlineStatusLine = e?.message || "创建失败 · 按 J 重试";
     playSfx("ui_back");
     closeOnlineSession();
   } finally {
@@ -791,7 +960,7 @@ async function onlineJoinRoom() {
     await session.joinRoom(code);
     playSfx("ui_ok");
   } catch (e) {
-    state.onlineStatusLine = e?.message || "加入失败";
+    state.onlineStatusLine = e?.message || "加入失败 · 检查号码后重试";
     playSfx("ui_back");
     closeOnlineSession();
   } finally {
@@ -800,43 +969,64 @@ async function onlineJoinRoom() {
 }
 
 function handleOnlineLobby(i) {
-  if (state.onlineBusy) return;
-  // typing join code (skip confirm keys so J/Enter won't pollute the code)
-  if (state.onlineLobbySel === 1) {
-    const skip = new Set([BIND_P1.attack, BIND_P1.start, BIND_P1.jump, "Enter", "Space", "NumpadEnter"]);
-    for (const code of Object.keys(input.just)) {
-      if (!input.just[code] || skip.has(code)) continue;
-      if (code === "Backspace") {
-        state.onlineJoinCode = state.onlineJoinCode.slice(0, -1);
-        playSfx("ui_move");
-      } else if (code.startsWith("Key") && code.length === 4) {
-        const ch = code.slice(3);
-        if (state.onlineJoinCode.length < 6) {
-          state.onlineJoinCode += ch;
-          playSfx("ui_move");
-        }
-      } else if (code.startsWith("Digit") || code.startsWith("Numpad")) {
-        const d = code.replace("Digit", "").replace("Numpad", "");
-        if (/^[2-9]$/.test(d) && state.onlineJoinCode.length < 6) {
-          state.onlineJoinCode += d;
-          playSfx("ui_move");
-        }
-      }
-    }
-  }
-
   if (input.pressed(BIND_P1.up) || input.pressed(BIND_P1.down)) {
     state.onlineLobbySel = state.onlineLobbySel === 0 ? 1 : 0;
     playSfx("ui_move");
   }
   if (confirmPressed(i)) {
-    if (state.onlineLobbySel === 0) onlineCreateRoom();
-    else onlineJoinRoom();
+    playSfx("ui_ok");
+    if (state.onlineLobbySel === 0) openOnlineHostScreen();
+    else openOnlineJoinScreen();
   }
   if (input.backPressed()) {
     playSfx("ui_back");
     closeOnlineSession();
     state.screen = "mode";
+    syncOnlineJoinPanel();
+  }
+}
+
+function handleOnlineHost(i) {
+  if (state.onlineBusy) return;
+  if (confirmPressed(i)) {
+    if (!state.online?.roomCode) onlineCreateRoom();
+    else copyRoomCode();
+  }
+  if (input.backPressed()) {
+    playSfx("ui_back");
+    closeOnlineSession();
+    state.screen = "onlineLobby";
+    state.confirmLock = 12;
+    syncOnlineJoinPanel();
+  }
+}
+
+function handleOnlineJoin(i) {
+  if (state.onlineBusy) return;
+  if (state.confirmLock > 0) return;
+
+  // Typing mode: only Esc exits input — no join / lobby / game keys
+  if (isOnlineJoinEditing()) {
+    if (input.backPressed()) {
+      playSfx("ui_back");
+      stopOnlineJoinEditing();
+    }
+    return;
+  }
+
+  // Idle: J / confirm enters input; Esc returns to lobby
+  if (confirmPressed(i)) {
+    startOnlineJoinEditing();
+    return;
+  }
+  if (input.backPressed()) {
+    playSfx("ui_back");
+    closeOnlineSession();
+    state.onlineJoinCode = "";
+    state.onlineJoinEditing = false;
+    state.screen = "onlineLobby";
+    state.confirmLock = 12;
+    syncOnlineJoinPanel();
   }
 }
 
@@ -874,6 +1064,7 @@ function handleOnlineChars(i) {
     playSfx("ui_back");
     closeOnlineSession();
     state.screen = "onlineLobby";
+    syncOnlineJoinPanel();
   }
 }
 
@@ -925,6 +1116,7 @@ function beginOnlineMatch() {
   state.screen = "fight";
   state.confirmLock = 30;
   if (state.online) state.online.remoteInput = emptyInput();
+  syncOnlineJoinPanel();
 }
 
 function tickOnlineFight() {
@@ -964,8 +1156,8 @@ function drawOnlineLobby() {
   ctx.fillText("ONLINE VS", W / 2, 90);
 
   const rows = [
-    { label: "创建房间", sub: state.online?.roomCode && state.onlineRole === "host" ? `号码 ${state.online.roomCode}` : "生成 6 位房间号" },
-    { label: "加入房间", sub: `输入: ${state.onlineJoinCode.padEnd(6, "_")}` },
+    { label: "创建房间", sub: "进入后生成房间号" },
+    { label: "加入房间", sub: "进入后输入房间号" },
   ];
   rows.forEach((r, i) => {
     const y = 220 + i * 110;
@@ -988,8 +1180,65 @@ function drawOnlineLobby() {
   ctx.fillText(state.onlineStatusLine || "", W / 2, 480);
   ctx.font = "10px 'Press Start 2P'";
   ctx.fillStyle = "#6b7c90";
-  ctx.fillText("W/S 切换 · 字母/数字输入 · J确认 · ESC返回", W / 2, 560);
-  ctx.fillText("P2P 直连 · 延迟低 · 需双方可访问 PeerJS", W / 2, 590);
+  const touchUi = getControlMode() === "touch";
+  ctx.fillText(touchUi ? "点选项目 · 确认键进入 · 返回键退出" : "W/S 选择 · J 进入 · ESC 返回", W / 2, 560);
+  ctx.fillText("电脑 ↔ 手机均可 · 双方打开同一游戏网址", W / 2, 590);
+}
+
+function drawOnlineHost() {
+  ctx.textAlign = "center";
+  ctx.font = "20px 'Press Start 2P'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText("创建房间", W / 2, 90);
+
+  const code = state.online?.roomCode || "------";
+  ctx.font = "14px 'Share Tech Mono'";
+  ctx.fillStyle = "#8b9bb0";
+  ctx.fillText("房间号", W / 2, 220);
+  ctx.font = "36px 'Press Start 2P'";
+  ctx.fillStyle = "#fff";
+  ctx.fillText(code, W / 2, 290);
+
+  ctx.font = "16px 'Share Tech Mono'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText(state.onlineStatusLine || "", W / 2, 380);
+
+  ctx.font = "10px 'Press Start 2P'";
+  ctx.fillStyle = "#6b7c90";
+  if (!state.online?.roomCode && !state.onlineBusy) {
+    ctx.fillText("J / 确认 · 重新创建 · ESC 返回", W / 2, 560);
+  } else {
+    ctx.fillText("点号码可复制 · 发给电脑或手机对手 · ESC 返回", W / 2, 560);
+  }
+}
+
+function drawOnlineJoin() {
+  ctx.textAlign = "center";
+  ctx.font = "20px 'Press Start 2P'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText("加入房间", W / 2, 90);
+
+  const editing = isOnlineJoinEditing();
+  ctx.font = "14px 'Share Tech Mono'";
+  ctx.fillStyle = "#8b9bb0";
+  ctx.fillText(editing ? "正在输入房间号…" : "点击下方输入框后再输入", W / 2, 200);
+
+  const display = state.onlineJoinCode.padEnd(6, "_").split("").join(" ");
+  ctx.font = "28px 'Press Start 2P'";
+  ctx.fillStyle = editing ? "#fff" : "#6b7c90";
+  ctx.fillText(display, W / 2, 260);
+
+  ctx.font = "16px 'Share Tech Mono'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText(state.onlineStatusLine || "", W / 2, 320);
+
+  ctx.font = "10px 'Press Start 2P'";
+  ctx.fillStyle = "#6b7c90";
+  ctx.fillText(
+    editing ? "输入中 · Esc 退出输入 · 点「加入房间」确认" : "点输入框开始 · Esc 返回大厅",
+    W / 2,
+    560
+  );
 }
 
 function drawOnlineChars() {
@@ -1159,6 +1408,8 @@ function draw() {
   if (state.screen === "title") drawTitle();
   else if (state.screen === "mode") drawMode();
   else if (state.screen === "onlineLobby") drawOnlineLobby();
+  else if (state.screen === "onlineHost") drawOnlineHost();
+  else if (state.screen === "onlineJoin") drawOnlineJoin();
   else if (state.screen === "onlineChars") drawOnlineChars();
   else if (state.screen === "onlineStage") drawOnlineStage();
   else if (state.screen === "storyUpgrades") drawStoryUpgrades();
@@ -1506,14 +1757,17 @@ function drawTitle() {
   }
 
   const enterY = tester ? 512 : acc ? 420 : 400;
+  const touchEnter = getControlMode() === "touch";
   ctx.font = "14px 'Press Start 2P'";
   ctx.fillStyle = state.menuFlash % 40 < 28 ? "#e8eef6" : "#5a6a7c";
-  ctx.fillText("PRESS ENTER", W / 2, enterY);
+  ctx.fillText(touchEnter ? "点击进入" : "PRESS ENTER", W / 2, enterY);
 
   ctx.font = "10px 'Share Tech Mono'";
   ctx.fillStyle = "#6b7c90";
   ctx.fillText(
-    "T tutorial · H controls · O settings · M music · [-] mute" + (isMuted() ? " (MUTED)" : ""),
+    touchEnter
+      ? "点屏幕进入 · O 设置 · M 音乐 · [-] 静音" + (isMuted() ? " (MUTED)" : "")
+      : "T tutorial · H controls · O settings · M music · [-] mute" + (isMuted() ? " (MUTED)" : ""),
     W / 2,
     enterY + 36
   );
@@ -1539,7 +1793,11 @@ function drawTitle() {
     ctx.fillStyle = "#cfd8e6";
     ctx.fillText(`当前帐号：${accountDisplayName() || "—"}`, W / 2, by + 100);
     ctx.fillStyle = "#8b9bb0";
-    ctx.fillText("Enter / J 确认退出 · Esc / N 取消", W / 2, by + 148);
+    ctx.fillText(
+      getControlMode() === "touch" ? "点击确认退出 · Esc / N 取消" : "Enter / J 确认退出 · Esc / N 取消",
+      W / 2,
+      by + 148
+    );
   }
 }
 
@@ -1989,6 +2247,7 @@ function openSettings() {
   state.settingsSel = 0;
   state.settingsFlash = "";
   input.cancelRebind();
+  setTouchEditMode(false);
   state.screen = "settings";
   state.confirmLock = 12;
   hideHud();
@@ -2005,13 +2264,16 @@ function handleSettingsMenu(i) {
     return;
   }
 
+  const tabCount = 4;
   if (input.pressed(BIND_P1.left) || input.pressed("KeyQ")) {
-    state.settingsTab = (state.settingsTab + 2) % 3;
+    setTouchEditMode(false);
+    state.settingsTab = (state.settingsTab + tabCount - 1) % tabCount;
     state.settingsSel = 0;
     playSfx("ui_move");
   }
   if (input.pressed(BIND_P1.right) || input.pressed("KeyE")) {
-    state.settingsTab = (state.settingsTab + 1) % 3;
+    setTouchEditMode(false);
+    state.settingsTab = (state.settingsTab + 1) % tabCount;
     state.settingsSel = 0;
     playSfx("ui_move");
   }
@@ -2041,9 +2303,61 @@ function handleSettingsMenu(i) {
       playSfx("ui_back");
       state.confirmLock = 10;
     }
+  } else if (state.settingsTab === 2) {
+    // Touch layout tab
+    if (input.pressed(BIND_P1.up) || input.pressed(BIND_P1.down)) {
+      state.settingsSel = state.settingsSel === 0 ? 1 : 0;
+      playSfx("ui_move");
+    }
+    if (confirmPressed(i) || i.attack) {
+      if (state.settingsSel === 0) {
+        // Toggle edit / enable touch
+        if (getControlMode() !== "touch") setControlMode("touch");
+        const next = !isTouchEditMode();
+        setTouchEditMode(next);
+        state.settingsFlash = next
+          ? "拖动虚拟键调整位置 · 再按确认结束"
+          : "已保存触屏布局";
+        playSfx("ui_ok");
+      } else {
+        resetTouchLayout();
+        state.settingsFlash = "触屏布局已重置";
+        playSfx("ui_back");
+      }
+      state.confirmLock = 12;
+    }
+    if (i.special || input.pressed("KeyT")) {
+      setControlMode("touch");
+      setTouchEditMode(false);
+      state.settingsFlash = "已切换为触屏";
+      playSfx("ui_ok");
+      state.confirmLock = 10;
+    }
+    if (input.pressed("KeyK")) {
+      setControlMode("keyboard");
+      setTouchEditMode(false);
+      state.settingsFlash = "已切换为键盘";
+      playSfx("ui_ok");
+      state.confirmLock = 10;
+    }
   } else {
-    // Account tab
-    if (confirmPressed(i) || i.special || input.pressed("KeyP")) {
+    // Account tab — J sync cloud; P/K password
+    if (confirmPressed(i)) {
+      playSfx("ui_ok");
+      state.settingsFlash = "正在同步帐号到云端…";
+      state.confirmLock = 20;
+      (async () => {
+        const pull = await syncAccountsFromCloud(accountCloudIo);
+        const push = await pushAccountsToCloud(accountCloudIo);
+        if (pull.ok || push.ok) {
+          state.settingsFlash = getCloudStatus()?.message || "云端同步完成";
+          playSfx("ui_ok");
+        } else {
+          state.settingsFlash = push.error || pull.error || "同步失败";
+          playSfx("ui_back");
+        }
+      })();
+    } else if (i.special || input.pressed("KeyP") || input.pressed("KeyK")) {
       playSfx("ui_ok");
       openPasswordFromSettings();
       state.confirmLock = 12;
@@ -2053,27 +2367,28 @@ function handleSettingsMenu(i) {
   if (input.backPressed()) {
     playSfx("ui_back");
     input.cancelRebind();
+    setTouchEditMode(false);
     goToTitle({ syncMusic: false });
     state.confirmLock = 12;
   }
 }
 
 function drawSettings() {
-  const tabs = ["P1 键位", "P2 键位", "账号"];
+  const tabs = ["P1 键位", "P2 键位", "触屏", "账号"];
   ctx.textAlign = "center";
   ctx.font = "20px 'Press Start 2P'";
   ctx.fillStyle = "#ffd166";
   ctx.fillText("SETTINGS", W / 2, 64);
 
   tabs.forEach((t, i) => {
-    const x = 280 + i * 240;
+    const x = 160 + i * 240;
     const sel = state.settingsTab === i;
     ctx.fillStyle = sel ? "rgba(255,107,44,0.2)" : "rgba(255,255,255,0.04)";
     ctx.fillRect(x - 100, 88, 200, 40);
     ctx.strokeStyle = sel ? "#ff6b2c" : "#2a3544";
     ctx.lineWidth = sel ? 3 : 2;
     ctx.strokeRect(x - 100, 88, 200, 40);
-    ctx.font = "12px 'Press Start 2P'";
+    ctx.font = "11px 'Press Start 2P'";
     ctx.fillStyle = sel ? "#fff" : "#8b9bb0";
     ctx.fillText(t, x, 114);
   });
@@ -2087,30 +2402,59 @@ function drawSettings() {
   if (state.settingsTab === 0 || state.settingsTab === 1) {
     const actions = state.settingsTab === 0 ? BIND_ACTIONS_P1 : BIND_ACTIONS_P2;
     const binds = state.settingsTab === 0 ? BIND_P1 : BIND_P2;
-    const cols = 2;
+    const col = 2;
+    const startY = 180;
     actions.forEach((a, i) => {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const x = 160 + col * 520;
-      const y = 180 + row * 48;
+      const colI = i % col;
+      const row = Math.floor(i / col);
+      const x = 220 + colI * 420;
+      const y = startY + row * 36;
       const sel = state.settingsSel === i;
-      ctx.fillStyle = sel ? "rgba(255,107,44,0.16)" : "rgba(255,255,255,0.03)";
-      ctx.fillRect(x, y, 480, 40);
-      ctx.strokeStyle = sel ? "#ff6b2c" : "#2a3544";
-      ctx.lineWidth = sel ? 2 : 1;
-      ctx.strokeRect(x, y, 480, 40);
       ctx.textAlign = "left";
-      ctx.font = "13px 'Press Start 2P'";
-      ctx.fillStyle = sel ? "#fff" : "#8b9bb0";
-      ctx.fillText(a.label, x + 16, y + 26);
-      ctx.textAlign = "right";
-      ctx.fillStyle = sel && input.isRebinding() ? "#ffd166" : "#6dffb0";
-      ctx.fillText(formatBindCode(binds[a.id]), x + 460, y + 26);
+      ctx.font = "12px 'Share Tech Mono'";
+      ctx.fillStyle = sel ? "#ffd166" : "#8b9bb0";
+      ctx.fillText(`${sel ? "› " : "  "}${a.label}`, x, y);
+      ctx.fillStyle = sel ? "#fff" : "#6b7c90";
+      ctx.fillText(formatBindCode(binds[a.id]), x + 160, y);
     });
     ctx.textAlign = "center";
-    ctx.font = "11px 'Press Start 2P'";
+    ctx.font = "10px 'Press Start 2P'";
     ctx.fillStyle = "#6b7c90";
-    ctx.fillText("←/→ 分页 · ↑↓ 选择 · J/ENTER 改键 · R 重置本页 · ESC 返回", W / 2, 680);
+    ctx.fillText("W/S 选择 · J 改键 · R 重置 · Q/E 切页 · ESC 返回", W / 2, 690);
+  } else if (state.settingsTab === 2) {
+    const mode = getControlMode() || "未选";
+    const modeLabel = mode === "touch" ? "触屏" : mode === "keyboard" ? "键盘" : "未选择";
+    ctx.font = "14px 'Share Tech Mono'";
+    ctx.fillStyle = "#e8eef6";
+    ctx.fillText(`当前控制：${modeLabel}${isTouchCapable() ? " · 本机支持触屏" : ""}`, W / 2, 190);
+
+    const rows = [
+      { label: isTouchEditMode() ? "结束调整并保存" : "调整触屏按键位置", sub: "进入后拖动虚拟键" },
+      { label: "重置触屏布局", sub: "恢复默认位置" },
+    ];
+    rows.forEach((r, i) => {
+      const y = 260 + i * 90;
+      const sel = state.settingsSel === i;
+      ctx.fillStyle = sel ? "rgba(255,107,44,0.15)" : "rgba(255,255,255,0.03)";
+      ctx.fillRect(W / 2 - 280, y - 36, 560, 78);
+      ctx.strokeStyle = sel ? "#ff6b2c" : "#2a3544";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(W / 2 - 280, y - 36, 560, 78);
+      ctx.font = "14px 'Press Start 2P'";
+      ctx.fillStyle = sel ? "#fff" : "#8b9bb0";
+      ctx.fillText(r.label, W / 2, y);
+      ctx.font = "13px 'Share Tech Mono'";
+      ctx.fillStyle = "#6b7c90";
+      ctx.fillText(r.sub, W / 2, y + 24);
+    });
+
+    ctx.font = "12px 'Share Tech Mono'";
+    ctx.fillStyle = "#8b9bb0";
+    ctx.fillText("快捷：T 切触屏 · K 切键盘 · J 确认当前项", W / 2, 480);
+    ctx.fillText("触屏设备会询问一次；接上键盘时也会再问是否切换", W / 2, 510);
+    ctx.font = "10px 'Press Start 2P'";
+    ctx.fillStyle = "#6b7c90";
+    ctx.fillText("W/S 选择 · Q/E 切页 · ESC 返回", W / 2, 690);
   } else {
     const acc = getCurrentAccount();
     ctx.textAlign = "left";
@@ -2123,32 +2467,41 @@ function drawSettings() {
     ctx.font = "14px 'Share Tech Mono'";
     ctx.fillStyle = "#8b9bb0";
     ctx.fillText(`角色：${acc?.label || acc?.role || "—"}`, 200, 280);
-    ctx.fillText(`待同步改动：${cloudQueueLength()} 条（云端上线后自动上传）`, 200, 320);
+    const cloud = getCloudStatus();
+    const target = resolveCloudTarget();
+    const cloudLine =
+      cloud?.message ||
+      (target.kind === "local" ? "本地服务器帐号库" : "公网云端帐号库");
+    ctx.fillStyle = cloud?.ok === false ? "#ff8fab" : cloud?.ok ? "#6dffb0" : "#8b9bb0";
+    ctx.fillText(`云端：${cloudLine}`, 200, 314);
+    ctx.fillStyle = "#6b7c90";
+    ctx.fillText(`通道 ${target.kind} · 待同步队列 ${cloudQueueLength()} · J 立即同步`, 200, 338);
 
     ctx.fillStyle = "rgba(255,107,44,0.12)";
-    ctx.fillRect(200, 360, 880, 120);
+    ctx.fillRect(200, 370, 880, 120);
     ctx.strokeStyle = "#ff6b2c";
     ctx.lineWidth = 2;
-    ctx.strokeRect(200, 360, 880, 120);
+    ctx.strokeRect(200, 370, 880, 120);
     ctx.font = "14px 'Press Start 2P'";
     ctx.fillStyle = "#fff";
-    ctx.fillText("修改密码", 230, 410);
+    ctx.fillText("修改密码", 230, 420);
     ctx.font = "14px 'Share Tech Mono'";
     ctx.fillStyle = "#cfd8e6";
     const tip =
       acc?.role === "admin" || acc?.role === "tester"
         ? "管理员 / 测试帐号不强制改密，可在此自愿修改。"
-        : "普通玩家首次登录须改密；之后也可在此修改。";
-    ctx.fillText(tip, 230, 444);
+        : "普通玩家首次登录须改密；改密会同步到云端（仅哈希）。";
+    ctx.fillText(tip, 230, 454);
     ctx.fillStyle = "#6dffb0";
-    ctx.fillText("按 J / ENTER / P / K 打开改密面板", 230, 476);
+    ctx.fillText("P / K 打开改密 · 只存用户名+密码哈希，不存明文", 230, 486);
 
     ctx.textAlign = "center";
     ctx.font = "11px 'Press Start 2P'";
     ctx.fillStyle = "#6b7c90";
-    ctx.fillText("←/→ 分页 · ESC 返回标题", W / 2, 680);
+    ctx.fillText("Q/E 分页 · ESC 返回标题", W / 2, 680);
   }
 }
+
 
 function openPasswordFromSettings() {
   state.passwordReturnTo = "settings";
@@ -2159,7 +2512,7 @@ function openPasswordFromSettings() {
     sub.textContent =
       acc?.role === "admin" || acc?.role === "tester"
         ? "管理员 / 测试帐号可自愿改密（非强制）。"
-        : "修改后将写入本地，并加入云端同步队列。";
+        : "修改后写入本地，并同步用户名与密码哈希到云端。";
   }
   const logoutBtn = document.getElementById("auth-logout-btn");
   if (logoutBtn) logoutBtn.textContent = "返回设置";
@@ -2315,7 +2668,7 @@ async function submitRegister() {
   state.authBusy = true;
   const btn = document.getElementById("auth-register-btn");
   if (btn) btn.disabled = true;
-  setAuthMsg("auth-register-msg", "注册中…");
+  setAuthMsg("auth-register-msg", "注册并同步云端…");
   try {
     const res = await registerAccount(user, pass, pass2);
     if (!res.ok) {
@@ -2325,6 +2678,10 @@ async function submitRegister() {
     }
     playSfx("ui_ok");
     unlockAudio();
+    if (res.cloudSynced === false) {
+      setAuthMsg("auth-register-msg", res.cloudError || "已注册，云端稍后同步");
+      await new Promise((r) => setTimeout(r, 700));
+    }
     enterGameAfterAuth();
   } finally {
     state.authBusy = false;
@@ -2340,7 +2697,7 @@ async function submitChangePassword() {
   state.authBusy = true;
   const btn = document.getElementById("auth-change-btn");
   if (btn) btn.disabled = true;
-  setAuthMsg("auth-change-msg", "保存中…");
+  setAuthMsg("auth-change-msg", "保存并同步云端…");
   try {
     const res = await changePassword(oldPass, newPass, new2);
     if (!res.ok) {
@@ -2348,7 +2705,11 @@ async function submitChangePassword() {
       playSfx("ui_back");
       return;
     }
-    setAuthMsg("auth-change-msg", "密码已更新", true);
+    setAuthMsg(
+      "auth-change-msg",
+      res.cloudSynced === false ? "密码已更新（云端稍后同步）" : "密码已更新并已同步",
+      true
+    );
     playSfx("ui_ok");
     setTimeout(() => enterGameAfterAuth(), 450);
   } finally {
@@ -2404,12 +2765,117 @@ function bindAuthUi() {
   document.getElementById("auth-new2")?.addEventListener("keydown", onEnter(submitChangePassword));
 }
 
+function bindOnlineJoinUi() {
+  const inputEl = document.getElementById("online-join-input");
+  const go = document.getElementById("online-join-go");
+  const back = document.getElementById("online-join-back");
+  if (inputEl) {
+    inputEl.readOnly = true;
+    inputEl.addEventListener("pointerdown", (ev) => {
+      // Clicking the field enters edit mode (and allows mobile keyboard)
+      if (state.screen !== "onlineJoin") return;
+      if (!state.onlineJoinEditing) {
+        ev.preventDefault();
+        startOnlineJoinEditing();
+      }
+    });
+    inputEl.addEventListener("focus", () => {
+      if (state.screen !== "onlineJoin") {
+        inputEl.blur();
+        return;
+      }
+      if (!state.onlineJoinEditing) {
+        // Focus without edit flag (e.g. autofill) — treat as enter edit
+        state.onlineJoinEditing = true;
+        document.getElementById("online-join-panel")?.classList.add("editing");
+        inputEl.readOnly = false;
+        state.onlineStatusLine = "输入中 · Esc 退出输入";
+      }
+    });
+    inputEl.addEventListener("blur", () => {
+      // Keep editing flag until Esc / back; blur alone (tap outside) also exits input
+      if (state.onlineJoinEditing) {
+        // slight delay so clicking Join still works before blur clears edit
+        setTimeout(() => {
+          if (document.activeElement === inputEl) return;
+          if (state.screen !== "onlineJoin") return;
+          // Stay in editing if user clicked Join/Back inside panel — those handlers run first
+          const ae = document.activeElement;
+          if (ae && ae.closest && ae.closest(".online-join-panel")) return;
+          stopOnlineJoinEditing();
+        }, 120);
+      }
+    });
+    inputEl.addEventListener("input", () => {
+      if (!state.onlineJoinEditing) return;
+      const v = inputEl.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+      if (inputEl.value !== v) inputEl.value = v;
+      state.onlineJoinCode = v;
+    });
+    inputEl.addEventListener("keydown", (ev) => {
+      if (!state.onlineJoinEditing) {
+        ev.preventDefault();
+        return;
+      }
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        stopOnlineJoinEditing();
+        playSfx("ui_back");
+        return;
+      }
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        state.onlineJoinCode = inputEl.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+        onlineJoinRoom();
+      }
+    });
+  }
+  go?.addEventListener("click", () => {
+    unlockAudio();
+    if (!state.onlineJoinEditing) {
+      startOnlineJoinEditing();
+      return;
+    }
+    if (inputEl) {
+      state.onlineJoinCode = inputEl.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    }
+    onlineJoinRoom();
+  });
+  back?.addEventListener("click", () => {
+    unlockAudio();
+    playSfx("ui_back");
+    if (state.onlineJoinEditing) {
+      stopOnlineJoinEditing();
+      state.confirmLock = 12;
+      return;
+    }
+    closeOnlineSession();
+    state.onlineJoinCode = "";
+    state.onlineJoinEditing = false;
+    state.screen = "onlineLobby";
+    state.confirmLock = 12;
+    syncOnlineJoinPanel();
+  });
+}
+
 async function bootstrapAuth() {
   loadBinds();
-  await ensureSeedAccounts();
+  initTouch(input, canvas);
   bindAuthUi();
+  bindOnlineJoinUi();
+  // Seed locally, then pull/push username + passHash to cloud
+  try {
+    await syncAccountsWithCloud();
+  } catch {
+    await ensureSeedAccounts();
+  }
   if (!isLoggedIn()) {
     showLoginPanel();
+    // Still allow control prompt on touch devices at login
+    if (isTouchCapable() && !getControlMode()) {
+      setTimeout(() => maybeAskTouchOnBoot(), 400);
+    }
     return;
   }
   if (mustChangePasswordNow()) {
@@ -2419,6 +2885,11 @@ async function bootstrapAuth() {
   }
   hideAuthPanels();
   goToTitle();
+  if (isTouchCapable() && !getControlMode()) {
+    setTimeout(() => maybeAskTouchOnBoot(), 500);
+  } else if (getControlMode()) {
+    updateTouchForScreen(state.screen);
+  }
 }
 
 loop();
@@ -2427,5 +2898,42 @@ Promise.all([loadAssets(), loadAudio(), probeLobbyMusic(), bootstrapAuth()]).the
   syncLobbyMusic();
 });
 
-window.addEventListener("pointerdown", unlockAudio, { once: false });
+window.addEventListener("pointerdown", (e) => {
+  unlockAudio();
+  const t = e.target;
+  if (t && t.closest && (t.closest(".auth-panel") || t.closest(".control-prompt") || t.closest(".touch-btn") || t.closest(".online-join-panel"))) {
+    return;
+  }
+  if (authPanelVisible() || isControlPromptVisible()) return;
+
+  // Title: tap to enter
+  if (getControlMode() === "touch" && state.screen === "title") {
+    pendingTitleTap = true;
+    return;
+  }
+
+  // Online lobby / host: tap rows or room code (works for mouse + touch)
+  if (state.screen === "onlineLobby" || state.screen === "onlineHost") {
+    const p = clientToGame(e.clientX, e.clientY);
+    if (p.x < 0 || p.y < 0 || p.x > W || p.y > H) return;
+    if (state.screen === "onlineLobby") {
+      for (let i = 0; i < 2; i++) {
+        const y = 220 + i * 110;
+        if (p.x >= W / 2 - 280 && p.x <= W / 2 + 280 && p.y >= y - 40 && p.y <= y + 50) {
+          state.onlineLobbySel = i;
+          playSfx("ui_ok");
+          if (i === 0) openOnlineHostScreen();
+          else openOnlineJoinScreen();
+          return;
+        }
+      }
+    } else if (state.screen === "onlineHost" && !state.onlineBusy) {
+      if (state.online?.roomCode && p.y >= 230 && p.y <= 320) {
+        copyRoomCode();
+      } else if (!state.online?.roomCode && p.y >= 250 && p.y <= 400) {
+        onlineCreateRoom();
+      }
+    }
+  }
+});
 window.addEventListener("keydown", unlockAudio, { once: false });

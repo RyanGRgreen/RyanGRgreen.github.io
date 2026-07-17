@@ -1,7 +1,7 @@
 /** Campaign Mode — 3 chapters × 5 levels (swarm grunts + Dark Lord finales). */
 
-import { CHARACTER_ORDER } from "./characters.js?v=72";
-import { Match } from "./match.js?v=72";
+import { CHARACTER_ORDER } from "./characters.js?v=78";
+import { Match } from "./match.js?v=78";
 
 /** Low-HP gray-headed trash mob. */
 function g(id, opts = {}) {

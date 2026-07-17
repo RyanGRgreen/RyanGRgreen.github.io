@@ -8,6 +8,35 @@ const PEER_PREFIX = "stickvs-";
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
 const INPUT_HZ_CAP = 60;
 
+/** STUN + free TURN (Open Relay) so PC ↔ 手机 / 不同运营商也能联通 */
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:stun.qq.com" },
+  { urls: "stun:stun.miwifi.com" },
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turns:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
+
 function emptyInput() {
   return {
     dirX: 0,
@@ -199,17 +228,18 @@ function randomCode(len = 6) {
   return out;
 }
 
-function waitPeerOpen(peer, timeoutMs = 12000) {
+function waitPeerOpen(peer, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     if (peer.open) return resolve(peer.id);
-    const to = setTimeout(() => reject(new Error("连接服务器超时")), timeoutMs);
+    const to = setTimeout(() => reject(new Error("连接信令超时 · 检查网络后重试")), timeoutMs);
     peer.once("open", (id) => {
       clearTimeout(to);
       resolve(id);
     });
     peer.once("error", (err) => {
       clearTimeout(to);
-      reject(err);
+      const msg = err?.type === "network" ? "无法访问 PeerJS（网络/防火墙）" : err?.message || "Peer 错误";
+      reject(new Error(msg));
     });
   });
 }
@@ -251,11 +281,10 @@ export class OnlineSession {
     this._ensurePeerJs();
     const opts = {
       debug: 0,
+      // Default PeerJS Cloud signaling — works across PC / phone / GitHub Pages
       config: {
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" },
-        ],
+        iceServers: ICE_SERVERS,
+        sdpSemantics: "unified-plan",
       },
     };
     return id ? new window.Peer(id, opts) : new window.Peer(opts);
@@ -384,31 +413,43 @@ export class OnlineSession {
     this._setStatus("joining");
     this.peer = this._makePeer();
     await waitPeerOpen(this.peer);
-    const conn = this.peer.connect(PEER_PREFIX + clean, {
-      reliable: true,
-      serialization: "json",
-    });
-    if (!conn) {
-      this._setStatus("error", "无法发起连接");
-      throw new Error("无法发起连接");
+
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const conn = this.peer.connect(PEER_PREFIX + clean, {
+          reliable: true,
+          serialization: "json",
+        });
+        if (!conn) throw new Error("无法发起连接");
+        await new Promise((resolve, reject) => {
+          const to = setTimeout(
+            () => reject(new Error("加入超时：核对房间号，双方需同一网址且可上网")),
+            25000
+          );
+          conn.on("open", () => {
+            clearTimeout(to);
+            resolve();
+          });
+          conn.on("error", (e) => {
+            clearTimeout(to);
+            reject(e);
+          });
+          this.peer.on("error", (e) => {
+            clearTimeout(to);
+            reject(e);
+          });
+        });
+        this._wireConn(conn);
+        return clean;
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 600));
+      }
     }
-    await new Promise((resolve, reject) => {
-      const to = setTimeout(() => reject(new Error("加入超时：检查房间号 / 网络")), 15000);
-      conn.on("open", () => {
-        clearTimeout(to);
-        resolve();
-      });
-      conn.on("error", (e) => {
-        clearTimeout(to);
-        reject(e);
-      });
-      this.peer.on("error", (e) => {
-        clearTimeout(to);
-        reject(e);
-      });
-    });
-    this._wireConn(conn);
-    return clean;
+    const msg = lastErr?.message || "加入失败";
+    this._setStatus("error", msg);
+    throw lastErr || new Error(msg);
   }
 
   sendInput(localInput) {

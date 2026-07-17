@@ -1,6 +1,10 @@
-/** Invite-code + local registration — Stick VERSUS auth. */
+/** Invite-code + registration — local + cloud sync (username + passHash only). */
 
-import { queueAccountChange } from "./cloudSync.js?v=72";
+import {
+  queueAccountChange,
+  syncAccountsFromCloud,
+  pushAccountsToCloud,
+} from "./cloudSync.js?v=78";
 
 const STORAGE_KEY = "stickVersus.accounts.v1";
 const SESSION_KEY = "stickVersus.session.v1";
@@ -30,7 +34,7 @@ function emptyStore() {
   return { accounts: {} };
 }
 
-function readStore() {
+export function readAccountStore() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return emptyStore();
@@ -42,13 +46,27 @@ function readStore() {
   }
 }
 
-function writeStore(store) {
+export function writeAccountStore(store) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   } catch {
     /* ignore */
   }
 }
+
+function readStore() {
+  return readAccountStore();
+}
+
+function writeStore(store) {
+  writeAccountStore(store);
+}
+
+/** Bound IO for cloud sync helpers. */
+export const accountCloudIo = {
+  readStore: readAccountStore,
+  writeStore: writeAccountStore,
+};
 
 function roleSkipsForcedChange(role) {
   return role === "admin" || role === "tester";
@@ -68,6 +86,13 @@ export async function hashPassword(invite, password) {
   return `fb_${(h >>> 0).toString(16)}`;
 }
 
+function touchAccountMeta(acc, { created = false } = {}) {
+  const now = Date.now();
+  if (created && !acc.createdAt) acc.createdAt = now;
+  acc.changedAt = now;
+  return acc;
+}
+
 /** Ensure seed accounts exist; never overwrite a player-changed password. */
 export async function ensureSeedAccounts() {
   const store = readStore();
@@ -76,7 +101,6 @@ export async function ensureSeedAccounts() {
     const id = seed.invite.toLowerCase();
     if (store.accounts[id]) {
       const acc = store.accounts[id];
-      // Migrate: admin/tester never forced to change
       if (roleSkipsForcedChange(acc.role || seed.role) && acc.mustChangePassword) {
         acc.mustChangePassword = false;
         changed = true;
@@ -85,20 +109,35 @@ export async function ensureSeedAccounts() {
         acc.role = seed.role;
         changed = true;
       }
+      if (!acc.createdAt) {
+        acc.createdAt = 1;
+        changed = true;
+      }
       continue;
     }
-    store.accounts[id] = {
-      invite: seed.invite,
-      role: seed.role,
-      label: seed.label || seed.role,
-      passHash: await hashPassword(seed.invite, seed.password),
-      mustChangePassword: !roleSkipsForcedChange(seed.role),
-      defaultPass: true,
-    };
+    store.accounts[id] = touchAccountMeta(
+      {
+        invite: seed.invite,
+        role: seed.role,
+        label: seed.label || seed.role,
+        passHash: await hashPassword(seed.invite, seed.password),
+        mustChangePassword: !roleSkipsForcedChange(seed.role),
+        defaultPass: true,
+      },
+      { created: true }
+    );
     changed = true;
   }
   if (changed) writeStore(store);
   return store;
+}
+
+/** Pull cloud roster then ensure seeds. Call on boot / before login. */
+export async function syncAccountsWithCloud() {
+  await ensureSeedAccounts();
+  const result = await syncAccountsFromCloud(accountCloudIo);
+  await ensureSeedAccounts();
+  return result;
 }
 
 export function getSessionInvite() {
@@ -137,7 +176,7 @@ export function logout() {
  * @returns {Promise<{ ok: boolean, error?: string, account?: object, mustChangePassword?: boolean }>}
  */
 export async function loginWithInvite(inviteRaw, password) {
-  await ensureSeedAccounts();
+  await syncAccountsWithCloud();
   const invite = String(inviteRaw || "").trim();
   if (!invite) return { ok: false, error: "请输入帐号或邀请码" };
   if (!password) return { ok: false, error: "请输入密码" };
@@ -145,7 +184,7 @@ export async function loginWithInvite(inviteRaw, password) {
   const store = readStore();
   const id = invite.toLowerCase();
   const acc = store.accounts[id];
-  if (!acc) return { ok: false, error: "帐号不存在" };
+  if (!acc) return { ok: false, error: "帐号不存在（可点注册，或等云端同步）" };
 
   const hash = await hashPassword(acc.invite || invite, password);
   if (hash !== acc.passHash) return { ok: false, error: "密码错误" };
@@ -156,8 +195,7 @@ export async function loginWithInvite(inviteRaw, password) {
     return { ok: false, error: "无法保存登录状态" };
   }
 
-  const force =
-    !!acc.mustChangePassword && !roleSkipsForcedChange(acc.role);
+  const force = !!acc.mustChangePassword && !roleSkipsForcedChange(acc.role);
   queueAccountChange("login", { invite: acc.invite || id, role: acc.role });
 
   return {
@@ -171,18 +209,17 @@ function normalizeUsername(raw) {
   return String(raw || "").trim();
 }
 
-/** Reserved ids (seed invites + common names) cannot be registered. */
 function isReservedUsername(id) {
   if (SEED_ACCOUNTS.some((s) => s.invite.toLowerCase() === id)) return true;
   return id === "admin" || id === "guest" || id === "tester" || id === "root";
 }
 
 /**
- * Register a new local player account.
+ * Register a new player account (local + cloud).
  * @returns {Promise<{ ok: boolean, error?: string, account?: object }>}
  */
 export async function registerAccount(usernameRaw, password, confirmPass) {
-  await ensureSeedAccounts();
+  await syncAccountsWithCloud();
   const username = normalizeUsername(usernameRaw);
   if (!username) return { ok: false, error: "请输入用户名" };
   if (!USERNAME_RE.test(username)) {
@@ -200,16 +237,18 @@ export async function registerAccount(usernameRaw, password, confirmPass) {
   const store = readStore();
   if (store.accounts[id]) return { ok: false, error: "用户名已被注册" };
 
-  const acc = {
-    invite: username,
-    role: "player",
-    label: "注册玩家",
-    passHash: await hashPassword(username, password),
-    mustChangePassword: false,
-    defaultPass: false,
-    registered: true,
-    createdAt: Date.now(),
-  };
+  const acc = touchAccountMeta(
+    {
+      invite: username,
+      role: "player",
+      label: "注册玩家",
+      passHash: await hashPassword(username, password),
+      mustChangePassword: false,
+      defaultPass: false,
+      registered: true,
+    },
+    { created: true }
+  );
   store.accounts[id] = acc;
   writeStore(store);
 
@@ -225,12 +264,26 @@ export async function registerAccount(usernameRaw, password, confirmPass) {
     createdAt: acc.createdAt,
   });
 
-  return { ok: true, account: acc };
+  // 创建后立刻上传（等待完成，避免进游戏后未同步）
+  const sync = await pushAccountsToCloud(accountCloudIo);
+  if (!sync.ok) {
+    // 再试一次；仍失败则返回提示，本地帐号已可用
+    const retry = await pushAccountsToCloud(accountCloudIo);
+    if (!retry.ok) {
+      return {
+        ok: true,
+        account: acc,
+        cloudSynced: false,
+        cloudError: retry.error || sync.error || "云端同步失败，可稍后在设置中重试",
+      };
+    }
+  }
+
+  return { ok: true, account: acc, cloudSynced: true };
 }
 
 /**
  * Change password for the current session account.
- * Clears mustChangePassword only on success.
  */
 export async function changePassword(oldPass, newPass, confirmPass) {
   const id = getSessionInvite();
@@ -251,7 +304,7 @@ export async function changePassword(oldPass, newPass, confirmPass) {
   acc.passHash = await hashPassword(acc.invite || id, newPass);
   acc.mustChangePassword = false;
   acc.defaultPass = false;
-  acc.changedAt = Date.now();
+  touchAccountMeta(acc);
   store.accounts[id] = acc;
   writeStore(store);
   queueAccountChange("password_change", {
@@ -259,10 +312,12 @@ export async function changePassword(oldPass, newPass, confirmPass) {
     role: acc.role,
     changedAt: acc.changedAt,
   });
-  return { ok: true };
+  const sync = await pushAccountsToCloud(accountCloudIo);
+  if (sync.ok) return { ok: true, cloudSynced: true };
+  const retry = await pushAccountsToCloud(accountCloudIo);
+  return { ok: true, cloudSynced: !!retry.ok };
 }
 
-/** Force change only for normal players still on default password. */
 export function mustChangePasswordNow() {
   const acc = getCurrentAccount();
   if (!acc) return false;
@@ -276,7 +331,6 @@ export function accountDisplayName() {
   return acc.invite || getSessionInvite() || "";
 }
 
-/** Test invite has top privileges: free upgrades + skip any stage. */
 export function isTesterAccount() {
   const acc = getCurrentAccount();
   return !!acc && acc.role === "tester";

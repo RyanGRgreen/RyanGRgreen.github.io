@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PORT_DEFAULT = 9473
+ACCOUNTS_PATH = ROOT / "data" / "accounts-cloud.json"
 
 # Match cache-bust query on local asset URLs
 V_QUERY = re.compile(
@@ -79,6 +80,82 @@ LIVE_RELOAD = """
 """
 
 
+def empty_accounts_doc() -> dict:
+    return {"v": 1, "game": "stickVersus", "updatedAt": 0, "accounts": {}}
+
+
+def read_accounts_doc() -> dict:
+    try:
+        if not ACCOUNTS_PATH.is_file():
+            return empty_accounts_doc()
+        data = json.loads(ACCOUNTS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return empty_accounts_doc()
+        acc = data.get("accounts")
+        if not isinstance(acc, dict):
+            data["accounts"] = {}
+        return data
+    except Exception:
+        return empty_accounts_doc()
+
+
+def write_accounts_doc(doc: dict) -> None:
+    ACCOUNTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    clean_accounts: dict = {}
+    raw = doc.get("accounts") if isinstance(doc, dict) else {}
+    if isinstance(raw, dict):
+        for key, acc in raw.items():
+            if not isinstance(acc, dict):
+                continue
+            invite = str(acc.get("invite") or key)
+            pass_hash = str(acc.get("passHash") or "")
+            if not pass_hash:
+                continue
+            # Never persist plaintext password fields
+            clean_accounts[str(key).lower()] = {
+                "invite": invite,
+                "role": acc.get("role") or "player",
+                "label": acc.get("label") or "",
+                "passHash": pass_hash,
+                "mustChangePassword": bool(acc.get("mustChangePassword")),
+                "defaultPass": bool(acc.get("defaultPass")),
+                "registered": bool(acc.get("registered")),
+                "createdAt": int(acc.get("createdAt") or 0),
+                "changedAt": int(acc.get("changedAt") or 0),
+            }
+    out = {
+        "v": 1,
+        "game": "stickVersus",
+        "updatedAt": int(time.time() * 1000),
+        "accounts": clean_accounts,
+    }
+    ACCOUNTS_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def merge_accounts_doc(local: dict, remote: dict) -> dict:
+    """Merge by changedAt/createdAt — newer wins per account id."""
+    out_acc = dict(local.get("accounts") or {})
+    for key, rem in (remote.get("accounts") or {}).items():
+        if not isinstance(rem, dict):
+            continue
+        kid = str(key).lower()
+        loc = out_acc.get(kid)
+        if not loc:
+            out_acc[kid] = rem
+            continue
+        lt = max(int(loc.get("changedAt") or 0), int(loc.get("createdAt") or 0))
+        rt = max(int(rem.get("changedAt") or 0), int(rem.get("createdAt") or 0))
+        if rt >= lt:
+            merged = dict(loc)
+            merged.update(rem)
+            out_acc[kid] = merged
+        else:
+            merged = dict(rem)
+            merged.update(loc)
+            out_acc[kid] = merged
+    return {"v": 1, "game": "stickVersus", "updatedAt": int(time.time() * 1000), "accounts": out_acc}
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -91,10 +168,34 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
         super().end_headers()
 
+    def _json_response(self, code: int, obj: dict) -> None:
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            data = json.loads(raw.decode("utf-8") or "{}")
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.end_headers()
+
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] in ("/__version", "/__version/"):
+        path = self.path.split("?", 1)[0]
+        if path in ("/__version", "/__version/"):
             body = json.dumps({"v": build_id(ROOT)}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -102,7 +203,30 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path in ("/api/accounts", "/api/accounts/"):
+            self._json_response(200, read_accounts_doc())
+            return
         super().do_GET()
+
+    def do_PUT(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path in ("/api/accounts", "/api/accounts/"):
+            incoming = self._read_json_body()
+            merged = merge_accounts_doc(read_accounts_doc(), incoming)
+            write_accounts_doc(merged)
+            self._json_response(200, read_accounts_doc())
+            return
+        self.send_error(404)
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path in ("/api/accounts", "/api/accounts/"):
+            incoming = self._read_json_body()
+            merged = merge_accounts_doc(read_accounts_doc(), incoming)
+            write_accounts_doc(merged)
+            self._json_response(200, read_accounts_doc())
+            return
+        self.send_error(404)
 
     def send_head(self):
         path = self.translate_path(self.path.split("?", 1)[0])
