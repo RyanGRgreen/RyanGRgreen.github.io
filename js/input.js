@@ -1,7 +1,7 @@
 /** Keyboard bindings — defaults + localStorage remaps. */
 
-import { queueAccountChange } from "./cloudSync.js?v=71";
-import { getSessionInvite } from "./accounts.js?v=71";
+import { queueAccountChange } from "./cloudSync.js?v=72";
+import { getSessionInvite } from "./accounts.js?v=72";
 
 export class Input {
   constructor() {

@@ -1,6 +1,6 @@
-import { CHARACTERS, CHARACTER_ORDER } from "./characters.js?v=71";
-import { Match } from "./match.js?v=71";
-import { BIND_P1, BIND_P2 } from "./input.js?v=71";
+import { CHARACTERS, CHARACTER_ORDER } from "./characters.js?v=72";
+import { Match } from "./match.js?v=72";
+import { BIND_P1, BIND_P2 } from "./input.js?v=72";
 
 function p1Steps(char) {
   const name = char.name;

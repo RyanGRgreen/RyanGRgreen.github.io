@@ -1,6 +1,6 @@
-import { CHARACTERS } from "./characters.js?v=71";
-import { STAGES, ARENA } from "./stages.js?v=71";
-import { Fighter, makeAttack, attackBox, aabb } from "./fighter.js?v=71";
+import { CHARACTERS } from "./characters.js?v=72";
+import { STAGES, ARENA } from "./stages.js?v=72";
+import { Fighter, makeAttack, attackBox, aabb } from "./fighter.js?v=72";
 
 export class Match {
   constructor({

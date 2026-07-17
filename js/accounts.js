@@ -1,6 +1,6 @@
 /** Invite-code + local registration — Stick VERSUS auth. */
 
-import { queueAccountChange } from "./cloudSync.js?v=71";
+import { queueAccountChange } from "./cloudSync.js?v=72";
 
 const STORAGE_KEY = "stickVersus.accounts.v1";
 const SESSION_KEY = "stickVersus.session.v1";

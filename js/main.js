@@ -1,12 +1,12 @@
-import { Input, BIND_P1, BIND_P2, BIND_ACTIONS_P1, BIND_ACTIONS_P2, formatBindCode, loadBinds, resetBinds } from "./input.js?v=71";
-import { CHARACTERS, CHARACTER_ORDER } from "./characters.js?v=71";
-import { STAGES, STAGE_ORDER } from "./stages.js?v=71";
-import { Match } from "./match.js?v=71";
-import { drawMatch, syncHud, hideHud, drawStickFigure } from "./render.js?v=71";
-import { Tutorial } from "./tutorial.js?v=71";
-import { StoryMode, STORY_DISCLAIMER, STORY_SPEAKER_COLOR } from "./story.js?v=71";
-import { CampaignMode } from "./campaign.js?v=71";
-import { loadAssets } from "./assets.js?v=71";
+import { Input, BIND_P1, BIND_P2, BIND_ACTIONS_P1, BIND_ACTIONS_P2, formatBindCode, loadBinds, resetBinds } from "./input.js?v=72";
+import { CHARACTERS, CHARACTER_ORDER } from "./characters.js?v=72";
+import { STAGES, STAGE_ORDER } from "./stages.js?v=72";
+import { Match } from "./match.js?v=72";
+import { drawMatch, syncHud, hideHud, drawStickFigure } from "./render.js?v=72";
+import { Tutorial } from "./tutorial.js?v=72";
+import { StoryMode, STORY_DISCLAIMER, STORY_SPEAKER_COLOR } from "./story.js?v=72";
+import { CampaignMode } from "./campaign.js?v=72";
+import { loadAssets } from "./assets.js?v=72";
 import {
   STORY_UPGRADE_DEFS,
   loadCampaignUpgrades,
@@ -16,7 +16,7 @@ import {
   awardCampaignLevelClear,
   canUseCampaignUpgrades,
   previewCampaignStats,
-} from "./storyUpgrades.js?v=71";
+} from "./storyUpgrades.js?v=72";
 import {
   ensureSeedAccounts,
   loginWithInvite,
@@ -28,8 +28,8 @@ import {
   accountDisplayName,
   getCurrentAccount,
   isTesterAccount,
-} from "./accounts.js?v=71";
-import { cloudQueueLength } from "./cloudSync.js?v=71";
+} from "./accounts.js?v=72";
+import { cloudQueueLength } from "./cloudSync.js?v=72";
 import {
   loadAudio,
   unlockAudio,
@@ -38,7 +38,7 @@ import {
   toggleMute,
   isMuted,
   setMuteListener,
-} from "./audio.js?v=71";
+} from "./audio.js?v=72";
 import {
   probeLobbyMusic,
   getLobbyTracks,
@@ -54,7 +54,8 @@ import {
   isLobbyMusicPlaying,
   lobbyMusicStatusLine,
   openTrackOnBilibili,
-} from "./music.js?v=71";
+} from "./music.js?v=72";
+import { OnlineSession, applyMatchState, emptyInput } from "./online.js?v=72";
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -62,10 +63,10 @@ const W = canvas.width;
 const H = canvas.height;
 const input = new Input();
 
-const MODES = ["tutorial", "story", "campaign", "cpu", "versus"];
+const MODES = ["tutorial", "story", "campaign", "cpu", "versus", "online"];
 
 const state = {
-  screen: "title", // title, mode, chars, stage, fight, howto, tutorial, story, storyUpgrades, campaign, campmates, music
+  screen: "title", // + onlineLobby, onlineChars, onlineStage
   mode: "tutorial",
   modeIndex: 0,
   p1: 0,
@@ -75,6 +76,14 @@ const state = {
   tutorial: null,
   story: null,
   campaign: null,
+  online: null,
+  onlineRole: null,
+  onlineLobbySel: 0,
+  onlineJoinCode: "",
+  onlineStatusLine: "",
+  onlineHostReady: false,
+  onlineGuestReady: false,
+  onlineBusy: false,
   teammateCount: 1,
   storyUpgradeSel: 0,
   storyUpgradeFlash: "",
@@ -105,6 +114,9 @@ const LOBBY_SCREENS = new Set([
   "music",
   "storyUpgrades",
   "settings",
+  "onlineLobby",
+  "onlineChars",
+  "onlineStage",
 ]);
 
 function syncLobbyMusic() {
@@ -173,14 +185,18 @@ function loop() {
   } else if (state.screen === "campaign" && state.campaign) {
     tickCampaign();
   } else if (state.screen === "fight" && state.match) {
-    const i1 = input.read(BIND_P1);
-    const i2 = input.read(BIND_P2);
-    // Note: do NOT quit fight on Escape — many layouts remap Left Shift → Escape
-    if (state.match.phase === "matchover" && i1.start) {
-      exitPlayToTitle();
+    if (state.mode === "online" && state.online) {
+      tickOnlineFight();
     } else {
-      state.match.update(i1, i2);
-      syncHud(state.match);
+      const i1 = input.read(BIND_P1);
+      const i2 = input.read(BIND_P2);
+      // Note: do NOT quit fight on Escape — many layouts remap Left Shift → Escape
+      if (state.match.phase === "matchover" && i1.start) {
+        exitPlayToTitle();
+      } else {
+        state.match.update(i1, i2);
+        syncHud(state.match);
+      }
     }
   } else {
     handleMenus();
@@ -455,6 +471,7 @@ function handleMenus() {
       if (state.mode === "tutorial") startTutorial();
       else if (state.mode === "story") startStory();
       else if (state.mode === "campaign") state.screen = "chars";
+      else if (state.mode === "online") openOnlineLobby();
       else state.screen = "chars";
     }
     if (input.backPressed()) {
@@ -535,6 +552,12 @@ function handleMenus() {
       playSfx("ui_back");
       state.screen = "chars";
     }
+  } else if (state.screen === "onlineLobby") {
+    handleOnlineLobby(i);
+  } else if (state.screen === "onlineChars") {
+    handleOnlineChars(i);
+  } else if (state.screen === "onlineStage") {
+    handleOnlineStage(i);
   } else if (state.screen === "howto") {
     if (confirmPressed(i) || input.backPressed()) {
       playSfx("ui_back");
@@ -641,6 +664,361 @@ function startMatch() {
   state.screen = "fight";
 }
 
+function closeOnlineSession() {
+  try {
+    state.online?.destroy();
+  } catch {
+    /* ignore */
+  }
+  state.online = null;
+  state.onlineRole = null;
+  state.onlineJoinCode = "";
+  state.onlineStatusLine = "";
+  state.onlineHostReady = false;
+  state.onlineGuestReady = false;
+  state.onlineBusy = false;
+}
+
+function openOnlineLobby() {
+  closeOnlineSession();
+  state.onlineLobbySel = 0;
+  state.onlineJoinCode = "";
+  state.onlineStatusLine = "创建房间或输入 6 位房间号加入";
+  state.screen = "onlineLobby";
+  state.confirmLock = 18;
+  syncLobbyMusic();
+}
+
+function bindOnlineSession(session) {
+  state.online = session;
+  session.onStatus = (s, err) => {
+    if (s === "hosting") state.onlineStatusLine = `房间 ${session.roomCode} · 等待对手加入…`;
+    else if (s === "joining") state.onlineStatusLine = "正在加入…";
+    else if (s === "ready") {
+      state.onlineStatusLine = "已连接";
+      if (state.screen === "onlineLobby") {
+        state.onlineHostReady = false;
+        state.onlineGuestReady = false;
+        state.screen = "onlineChars";
+        state.confirmLock = 20;
+        playSfx("ui_ok");
+        syncOnlineChars();
+      }
+    } else if (s === "error" || s === "closed") {
+      state.onlineStatusLine = err || "连接断开";
+      if (state.screen === "fight") {
+        /* stay until user exits */
+      } else if (state.screen !== "onlineLobby") {
+        state.screen = "onlineLobby";
+      }
+    }
+  };
+  session.onMessage = (msg) => {
+    if (!msg || !msg.t) return;
+    if (msg.t === "char") {
+      if (typeof msg.p1 === "number") state.p1 = msg.p1 % CHARACTER_ORDER.length;
+      if (typeof msg.p2 === "number") state.p2 = msg.p2 % CHARACTER_ORDER.length;
+      if (typeof msg.hostReady === "boolean") state.onlineHostReady = msg.hostReady;
+      if (typeof msg.guestReady === "boolean") state.onlineGuestReady = msg.guestReady;
+      if (state.onlineHostReady && state.onlineGuestReady && session.isHost) {
+        state.screen = "onlineStage";
+        state.confirmLock = 20;
+        session.send({ t: "goStage", stage: state.stage });
+      }
+    } else if (msg.t === "goStage") {
+      if (typeof msg.stage === "number") state.stage = msg.stage % STAGE_ORDER.length;
+      state.screen = "onlineStage";
+      state.confirmLock = 20;
+    } else if (msg.t === "stage") {
+      if (typeof msg.stage === "number") state.stage = msg.stage % STAGE_ORDER.length;
+    } else if (msg.t === "start") {
+      if (typeof msg.p1 === "number") state.p1 = msg.p1 % CHARACTER_ORDER.length;
+      if (typeof msg.p2 === "number") state.p2 = msg.p2 % CHARACTER_ORDER.length;
+      if (typeof msg.stage === "number") state.stage = msg.stage % STAGE_ORDER.length;
+      beginOnlineMatch();
+    } else if (msg.t === "st" && !session.isHost && state.match) {
+      applyMatchState(state.match, msg);
+    }
+  };
+}
+
+function syncOnlineChars() {
+  const s = state.online;
+  if (!s?.connected) return;
+  s.send({
+    t: "char",
+    p1: state.p1,
+    p2: state.p2,
+    hostReady: state.onlineHostReady,
+    guestReady: state.onlineGuestReady,
+  });
+}
+
+async function onlineCreateRoom() {
+  if (state.onlineBusy) return;
+  state.onlineBusy = true;
+  state.onlineStatusLine = "创建中…";
+  try {
+    const session = new OnlineSession();
+    bindOnlineSession(session);
+    state.onlineRole = "host";
+    const code = await session.hostRoom();
+    state.onlineStatusLine = `房间 ${code} · 把号码发给对手`;
+    playSfx("ui_ok");
+  } catch (e) {
+    state.onlineStatusLine = e?.message || "创建失败";
+    playSfx("ui_back");
+    closeOnlineSession();
+  } finally {
+    state.onlineBusy = false;
+  }
+}
+
+async function onlineJoinRoom() {
+  if (state.onlineBusy) return;
+  const code = state.onlineJoinCode;
+  if (code.length !== 6) {
+    state.onlineStatusLine = "请输入完整 6 位房间号";
+    playSfx("ui_back");
+    return;
+  }
+  state.onlineBusy = true;
+  state.onlineStatusLine = "加入中…";
+  try {
+    const session = new OnlineSession();
+    bindOnlineSession(session);
+    state.onlineRole = "guest";
+    await session.joinRoom(code);
+    playSfx("ui_ok");
+  } catch (e) {
+    state.onlineStatusLine = e?.message || "加入失败";
+    playSfx("ui_back");
+    closeOnlineSession();
+  } finally {
+    state.onlineBusy = false;
+  }
+}
+
+function handleOnlineLobby(i) {
+  if (state.onlineBusy) return;
+  // typing join code (skip confirm keys so J/Enter won't pollute the code)
+  if (state.onlineLobbySel === 1) {
+    const skip = new Set([BIND_P1.attack, BIND_P1.start, BIND_P1.jump, "Enter", "Space", "NumpadEnter"]);
+    for (const code of Object.keys(input.just)) {
+      if (!input.just[code] || skip.has(code)) continue;
+      if (code === "Backspace") {
+        state.onlineJoinCode = state.onlineJoinCode.slice(0, -1);
+        playSfx("ui_move");
+      } else if (code.startsWith("Key") && code.length === 4) {
+        const ch = code.slice(3);
+        if (state.onlineJoinCode.length < 6) {
+          state.onlineJoinCode += ch;
+          playSfx("ui_move");
+        }
+      } else if (code.startsWith("Digit") || code.startsWith("Numpad")) {
+        const d = code.replace("Digit", "").replace("Numpad", "");
+        if (/^[2-9]$/.test(d) && state.onlineJoinCode.length < 6) {
+          state.onlineJoinCode += d;
+          playSfx("ui_move");
+        }
+      }
+    }
+  }
+
+  if (input.pressed(BIND_P1.up) || input.pressed(BIND_P1.down)) {
+    state.onlineLobbySel = state.onlineLobbySel === 0 ? 1 : 0;
+    playSfx("ui_move");
+  }
+  if (confirmPressed(i)) {
+    if (state.onlineLobbySel === 0) onlineCreateRoom();
+    else onlineJoinRoom();
+  }
+  if (input.backPressed()) {
+    playSfx("ui_back");
+    closeOnlineSession();
+    state.screen = "mode";
+  }
+}
+
+function handleOnlineChars(i) {
+  const host = state.onlineRole === "host";
+  let moved = false;
+  if (input.pressed(BIND_P1.left)) {
+    if (host) state.p1 = (state.p1 + CHARACTER_ORDER.length - 1) % CHARACTER_ORDER.length;
+    else state.p2 = (state.p2 + CHARACTER_ORDER.length - 1) % CHARACTER_ORDER.length;
+    moved = true;
+  }
+  if (input.pressed(BIND_P1.right)) {
+    if (host) state.p1 = (state.p1 + 1) % CHARACTER_ORDER.length;
+    else state.p2 = (state.p2 + 1) % CHARACTER_ORDER.length;
+    moved = true;
+  }
+  if (moved) {
+    playSfx("ui_move");
+    if (host) state.onlineHostReady = false;
+    else state.onlineGuestReady = false;
+    syncOnlineChars();
+  }
+  if (confirmPressed(i)) {
+    playSfx("ui_ok");
+    if (host) state.onlineHostReady = true;
+    else state.onlineGuestReady = true;
+    syncOnlineChars();
+    if (state.onlineHostReady && state.onlineGuestReady && host) {
+      state.screen = "onlineStage";
+      state.confirmLock = 20;
+      state.online?.send({ t: "goStage", stage: state.stage });
+    }
+  }
+  if (input.backPressed()) {
+    playSfx("ui_back");
+    closeOnlineSession();
+    state.screen = "onlineLobby";
+  }
+}
+
+function handleOnlineStage(i) {
+  const host = state.onlineRole === "host";
+  if (host) {
+    let moved = false;
+    if (input.pressed(BIND_P1.left)) {
+      state.stage = (state.stage + STAGE_ORDER.length - 1) % STAGE_ORDER.length;
+      moved = true;
+    }
+    if (input.pressed(BIND_P1.right)) {
+      state.stage = (state.stage + 1) % STAGE_ORDER.length;
+      moved = true;
+    }
+    if (moved) {
+      playSfx("ui_move");
+      state.online?.send({ t: "stage", stage: state.stage });
+    }
+    if (confirmPressed(i)) {
+      playSfx("ui_ok");
+      state.online?.send({
+        t: "start",
+        p1: state.p1,
+        p2: state.p2,
+        stage: state.stage,
+      });
+      beginOnlineMatch();
+    }
+  }
+  if (input.backPressed()) {
+    playSfx("ui_back");
+    state.onlineHostReady = false;
+    state.onlineGuestReady = false;
+    state.screen = "onlineChars";
+    syncOnlineChars();
+  }
+}
+
+function beginOnlineMatch() {
+  stopLobbyMusic();
+  state.match = new Match({
+    p1Id: CHARACTER_ORDER[state.p1],
+    p2Id: CHARACTER_ORDER[state.p2],
+    stageId: STAGE_ORDER[state.stage],
+    vsCpu: false,
+    onEvent: onGameEvent,
+  });
+  state.screen = "fight";
+  state.confirmLock = 30;
+  if (state.online) state.online.remoteInput = emptyInput();
+}
+
+function tickOnlineFight() {
+  const session = state.online;
+  const match = state.match;
+  if (!session || !match) return;
+
+  const local = input.read(BIND_P1);
+  if (match.phase === "matchover" && local.start) {
+    exitPlayToTitle();
+    return;
+  }
+
+  if (session.status === "closed" || session.status === "error") {
+    state.onlineStatusLine = session.error || "连接断开";
+  }
+
+  // periodic ping
+  if (state.menuFlash % 45 === 0) session.ping();
+
+  if (session.isHost) {
+    const i1 = local;
+    const i2 = session.remoteInput || emptyInput();
+    match.update(i1, i2);
+    session.sendState(match);
+  } else {
+    session.sendInput(local);
+    if (session.lastState) applyMatchState(match, session.lastState);
+  }
+  syncHud(match);
+}
+
+function drawOnlineLobby() {
+  ctx.textAlign = "center";
+  ctx.font = "20px 'Press Start 2P'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText("ONLINE VS", W / 2, 90);
+
+  const rows = [
+    { label: "创建房间", sub: state.online?.roomCode && state.onlineRole === "host" ? `号码 ${state.online.roomCode}` : "生成 6 位房间号" },
+    { label: "加入房间", sub: `输入: ${state.onlineJoinCode.padEnd(6, "_")}` },
+  ];
+  rows.forEach((r, i) => {
+    const y = 220 + i * 110;
+    const sel = state.onlineLobbySel === i;
+    ctx.fillStyle = sel ? "rgba(255,107,44,0.15)" : "rgba(255,255,255,0.03)";
+    ctx.fillRect(W / 2 - 280, y - 40, 560, 90);
+    ctx.strokeStyle = sel ? "#ff6b2c" : "#2a3544";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(W / 2 - 280, y - 40, 560, 90);
+    ctx.font = "16px 'Press Start 2P'";
+    ctx.fillStyle = sel ? "#fff" : "#8b9bb0";
+    ctx.fillText(r.label, W / 2, y);
+    ctx.font = "16px 'Share Tech Mono'";
+    ctx.fillStyle = "#ffd166";
+    ctx.fillText(r.sub, W / 2, y + 28);
+  });
+
+  ctx.font = "14px 'Share Tech Mono'";
+  ctx.fillStyle = "#8b9bb0";
+  ctx.fillText(state.onlineStatusLine || "", W / 2, 480);
+  ctx.font = "10px 'Press Start 2P'";
+  ctx.fillStyle = "#6b7c90";
+  ctx.fillText("W/S 切换 · 字母/数字输入 · J确认 · ESC返回", W / 2, 560);
+  ctx.fillText("P2P 直连 · 延迟低 · 需双方可访问 PeerJS", W / 2, 590);
+}
+
+function drawOnlineChars() {
+  ctx.textAlign = "center";
+  ctx.font = "16px 'Press Start 2P'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText(state.onlineRole === "host" ? "你是 HOST · 选 P1" : "你是 GUEST · 选 P2", W / 2, 48);
+  drawCharCard(60, 70, CHARACTER_ORDER[state.p1], state.onlineRole === "host", state.onlineHostReady ? "P1 READY" : "P1");
+  drawCharCard(680, 70, CHARACTER_ORDER[state.p2], state.onlineRole === "guest", state.onlineGuestReady ? "P2 READY" : "P2");
+  ctx.font = "12px 'Share Tech Mono'";
+  ctx.fillStyle = "#8b9bb0";
+  ctx.fillText(`房间 ${state.online?.roomCode || "——"} · RTT ${state.online?.rttMs || "—"}ms`, W / 2, 670);
+  ctx.font = "10px 'Press Start 2P'";
+  ctx.fillStyle = "#6b7c90";
+  ctx.fillText("A/D 选角 · J 准备 · ESC 退出房间", W / 2, 700);
+}
+
+function drawOnlineStage() {
+  drawStageSelect();
+  ctx.textAlign = "center";
+  ctx.font = "12px 'Press Start 2P'";
+  ctx.fillStyle = "#ffd166";
+  ctx.fillText(
+    state.onlineRole === "host" ? "HOST 选场地 · J 开战" : "等待 HOST 选择场地…",
+    W / 2,
+    40
+  );
+}
+
 function startTutorial() {
   stopLobbyMusic();
   state.tutorial = new Tutorial();
@@ -726,6 +1104,19 @@ function draw() {
 
   if (state.screen === "fight" && state.match) {
     drawMatch(ctx, state.match, W, H);
+    if (state.mode === "online" && state.online) {
+      ctx.font = "10px 'Press Start 2P'";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(16, 100, 220, 28);
+      ctx.fillStyle = "#6dffb0";
+      const role = state.onlineRole === "host" ? "HOST" : "GUEST";
+      ctx.fillText(`${role}  ${state.online.rttMs || "—"}ms`, 24, 120);
+      if (state.online.status === "closed" || state.online.status === "error") {
+        ctx.fillStyle = "#ff4d6d";
+        ctx.fillText(state.online.error || "DISCONNECTED", 24, 148);
+      }
+    }
     return;
   }
 
@@ -767,6 +1158,9 @@ function draw() {
 
   if (state.screen === "title") drawTitle();
   else if (state.screen === "mode") drawMode();
+  else if (state.screen === "onlineLobby") drawOnlineLobby();
+  else if (state.screen === "onlineChars") drawOnlineChars();
+  else if (state.screen === "onlineStage") drawOnlineStage();
   else if (state.screen === "storyUpgrades") drawStoryUpgrades();
   else if (state.screen === "settings") drawSettings();
   else if (state.screen === "chars") drawChars();
@@ -1385,26 +1779,27 @@ function drawMode() {
     { id: "campaign", label: "CAMPAIGN", sub: "关卡模式 — 3×5 关 · 角色升级 · AI 队友" },
     { id: "cpu", label: "VS CPU", sub: "对战火柴人 AI" },
     { id: "versus", label: "LOCAL VS", sub: "双人同键盘对战" },
+    { id: "online", label: "ONLINE VS", sub: "联机对战 — 房间号加入 · P2P" },
   ];
   options.forEach((op, i) => {
-    const y = 130 + i * 78;
+    const y = 118 + i * 68;
     const sel = state.mode === op.id;
     const soon = false;
     ctx.fillStyle = sel ? "rgba(255,107,44,0.15)" : "rgba(255,255,255,0.03)";
-    ctx.fillRect(W / 2 - 300, y - 36, 600, 80);
+    ctx.fillRect(W / 2 - 300, y - 30, 600, 68);
     ctx.strokeStyle = sel ? "#ff6b2c" : "#2a3544";
     ctx.lineWidth = 3;
-    ctx.strokeRect(W / 2 - 300, y - 36, 600, 80);
-    ctx.font = "16px 'Press Start 2P'";
+    ctx.strokeRect(W / 2 - 300, y - 30, 600, 68);
+    ctx.font = "15px 'Press Start 2P'";
     ctx.fillStyle = sel ? "#fff" : soon ? "#6b7c90" : "#8b9bb0";
     ctx.fillText(op.label, W / 2, y);
-    ctx.font = "14px 'Share Tech Mono'";
+    ctx.font = "13px 'Share Tech Mono'";
     ctx.fillStyle = soon ? "#ffd166" : "#6b7c90";
-    ctx.fillText(op.sub, W / 2, y + 26);
+    ctx.fillText(op.sub, W / 2, y + 22);
   });
   ctx.font = "10px 'Press Start 2P'";
   ctx.fillStyle = "#6b7c90";
-  ctx.fillText("W/S — MOVE   J/ENTER — CONFIRM", W / 2, 580);
+  ctx.fillText("W/S — MOVE   J/ENTER — CONFIRM", W / 2, 560);
 }
 
 function drawChars() {
@@ -1875,6 +2270,7 @@ function doLogout() {
 
 /** Leave a play session → title, keep login. */
 function exitPlayToTitle() {
+  closeOnlineSession();
   state.match = null;
   state.tutorial = null;
   state.story = null;
